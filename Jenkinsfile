@@ -21,7 +21,7 @@ pipeline {
             steps {
                 echo "--> Running Gitleaks secret scan..."
                 sh '''
-                    gitleaks detect --source=. --verbose --redact || {
+                    gitleaks detect --source=. --gitleaks-ignore-path=.gitleaksignore --verbose --redact || {
                         echo "❌ Gitleaks detected sensitive credentials committed in source code! Pipeline failing."
                         exit 1
                     }
