@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Inventory Manager</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#222}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+.card{border:1px solid #ddd;border-radius:8px;padding:12px}.card b{display:block;font-size:22px}
+form.add{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:16px}
+input,select,button{padding:7px;font:inherit}
+.bar{display:flex;gap:8px;margin-bottom:12px}.bar input{flex:1}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee}
+tr.low td{background:#fff4f4}.badge{background:#c62828;color:#fff;border-radius:4px;padding:1px 6px;font-size:12px}
+td.act{display:flex;gap:4px;flex-wrap:wrap}td.act input{width:64px}
+.err{color:#c62828;min-height:1.2em}
+</style></head>
+<body>
+<h1>Inventory Manager</h1>
+<div class="cards">
+  <div class="card">Products<b id="s-products">0</b></div>
+  <div class="card">Total units<b id="s-units">0</b></div>
+  <div class="card">Stock value<b id="s-value">0</b></div>
+  <div class="card">Low stock<b id="s-low">0</b></div>
+</div>
+
+<form class="add" id="add">
+  <input name="sku" placeholder="SKU" required>
+  <input name="name" placeholder="Name" required>
+  <input name="category" placeholder="Category">
+  <input name="price" type="number" step="0.01" min="0" placeholder="Price">
+  <input name="quantity" type="number" min="0" placeholder="Qty">
+  <input name="reorder_level" type="number" min="0" placeholder="Reorder at">
+  <button>Add product</button>
+</form>
+<div class="err" id="err"></div>
+
+<div class="bar">
+  <input id="search" placeholder="Search name or SKU">
+  <label><input type="checkbox" id="low"> Low stock only</label>
+</div>
+
+<table><thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Price</th><th>Qty</th><th>Stock actions</th></tr></thead>
+<tbody id="rows"></tbody></table>
+
+<script>
+const $=id=>document.getElementById(id), err=$('err');
+const J={'Content-Type':'application/json'};
+async function api(url,opts){
+  const r=await fetch(url,opts); err.textContent='';
+  if(r.status===204) return null;
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){err.textContent=(d.errors&&d.errors.join(', '))||d.error||'Request failed'; throw new Error(err.textContent);}
+  return d;
+}
+function cell(tr,text){const td=document.createElement('td');td.textContent=text;tr.append(td);return td;}
+
+async function loadSummary(){
+  const s=await api('/api/reports/summary');
+  $('s-products').textContent=s.products; $('s-units').textContent=s.total_units;
+  $('s-value').textContent=s.total_value.toFixed(2); $('s-low').textContent=s.low_stock_count;
+}
+async function load(){
+  const q=new URLSearchParams();
+  if($('search').value) q.set('search',$('search').value);
+  if($('low').checked) q.set('low_stock','true');
+  const items=await api('/api/products?'+q);
+  const body=$('rows'); body.innerHTML='';
+  items.forEach(p=>{
+    const tr=document.createElement('tr'); if(p.low_stock) tr.className='low';
+    cell(tr,p.sku); cell(tr,p.name); cell(tr,p.category); cell(tr,p.price.toFixed(2));
+    const q=cell(tr,p.quantity); if(p.low_stock){const b=document.createElement('span');b.className='badge';b.textContent='LOW';q.append(' ',b);}
+    const act=document.createElement('td'); act.className='act';
+    const n=document.createElement('input'); n.type='number'; n.min='0'; n.value='1';
+    const mk=(label,type)=>{const b=document.createElement('button');b.textContent=label;
+      b.onclick=async()=>{try{await api(`/api/products/${p.id}/movements`,{method:'POST',headers:J,body:JSON.stringify({type,quantity:Number(n.value)})});refresh();}catch{}};return b;};
+    const del=document.createElement('button'); del.textContent='✕';
+    del.onclick=async()=>{if(confirm('Delete '+p.name+'?')){await api('/api/products/'+p.id,{method:'DELETE'});refresh();}};
+    act.append(n,mk('+ In','in'),mk('− Out','out'),mk('Set','adjust'),del);
+    tr.append(act); body.append(tr);
+  });
+}
+const refresh=()=>Promise.all([load(),loadSummary()]).catch(()=>{});
+
+$('add').onsubmit=async e=>{
+  e.preventDefault();
+  const f=new FormData(e.target), body={};
+  for(const [k,v] of f.entries()){ if(v==='') continue; body[k]=['price','quantity','reorder_level'].includes(k)?Number(v):v; }
+  try{await api('/api/products',{method:'POST',headers:J,body:JSON.stringify(body)}); e.target.reset(); refresh();}catch{}
+};
+$('search').oninput=load; $('low').onchange=load;
+refresh();
+</script></body></html>
