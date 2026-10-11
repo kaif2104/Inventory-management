@@ -1,4 +1,3 @@
-cat << 'EOF' > Jenkinsfile
 pipeline {
     agent any
 
@@ -6,14 +5,8 @@ pipeline {
         SERVER2_IP       = '13.127.148.208'
         IMAGE_NAME       = 'kaif03/inventory'
         IMAGE_TAG        = "${BUILD_NUMBER}"
-        DOCKERHUB_CREDS  = 'kaif8546@'
-        SSH_CREDS        = '-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACCj8qj+0gG1jf98l7GdAj1PQ+wHwar+3enRdahLm+5KmgAAAKCmHfZIph32
-SAAAAAtzc2gtZWQyNTUxOQAAACCj8qj+0gG1jf98l7GdAj1PQ+wHwar+3enRdahLm+5Kmg
-AAAEC9kQW90U2ELYk2Qy8Si5to/XpFYNNwCWrCB4JbgZXeMqPyqP7SAbWN/3yXsZ0CPU9D
-7AfBqv7d6dF1qEub7kqaAAAAHGplbmtpbnMtZGVwbG95QGludmVudG9yeS1hcHAB
------END OPENSSH PRIVATE KEY-----'
+        DOCKERHUB_CREDS  = 'dockerhub-credentials'
+        SSH_CREDS        = 'server2-deploy-key'
     }
 
     stages {
@@ -198,4 +191,3 @@ AAAEC9kQW90U2ELYk2Qy8Si5to/XpFYNNwCWrCB4JbgZXeMqPyqP7SAbWN/3yXsZ0CPU9D
         }
     }
 }
-EOF
