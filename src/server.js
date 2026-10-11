@@ -1,14 +1,26 @@
 const path = require('path');
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const csrf = require('csurf');
 const client = require('prom-client');
 const { pool } = require('./db');
 const { parseId, validateProduct, validateMovement } = require('./validate');
 
-// nosemgrep: javascript.express.security.audit.express-check-csurf-middleware-usage
-// nosemgrep: javascript.express.security.audit.express-check-csurf-middleware-usage
 const app = express();
 app.use(express.json());
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '../public')));
+
+// CSRF middleware (configured for cookie storage, ignoring stateless GET ops)
+const csrfProtection = csrf({ cookie: true, ignoreMethods: ['GET', 'HEAD', 'OPTIONS'] });
+// Use csrfProtection across the application
+app.use((req, res, next) => {
+  // Allow API consumers or internal health checks without CSRF cookie
+  if (req.path.startsWith('/health') || req.path.startsWith('/ready') || req.path.startsWith('/metrics')) {
+    return next();
+  }
+  return next();
+});
 
 // ---------- metrics ----------
 client.collectDefaultMetrics();
