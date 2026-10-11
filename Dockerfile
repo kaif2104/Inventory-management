@@ -1,22 +1,25 @@
 FROM node:20-alpine
 
-# Set non-root working environment
+# Update system packages and npm to patch bundled CVEs
+RUN apk update && apk upgrade --no-cache && \
+    npm install -g npm@latest && \
+    rm -rf /root/.npm
+
 WORKDIR /app
 
-# Install curl for container health check
+# Install curl for healthcheck
 RUN apk add --no-cache curl
 
-# Install dependencies first (leverages Docker layer cache)
+# Copy and install production dependencies
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copy application code
+# Copy application files
 COPY . .
 
-# Use built-in unprivileged node user
+# Use non-root node user
 USER node
 
-# Default port
 ENV PORT=8000
 EXPOSE 8000
 

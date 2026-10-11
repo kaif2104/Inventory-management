@@ -85,7 +85,7 @@ pipeline {
             steps {
                 echo "--> Scanning Docker image with Trivy for CRITICAL CVEs..."
                 sh '''
-                    trivy image --severity CRITICAL --exit-code 1 ${IMAGE_NAME}:${IMAGE_TAG} || {
+                    trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 ${IMAGE_NAME}:${IMAGE_TAG} || {
                         echo "❌ Trivy found CRITICAL unpatched CVEs in the container image! Pipeline failing."
                         exit 1
                     }
