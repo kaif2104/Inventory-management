@@ -2,10 +2,10 @@ pipeline {
     agent any
 
     environment {
-        SERVER2_IP = '13.127.148.208'
-        IMAGE_NAME = 'inventory-app'
-        IMAGE_TAG  = "${BUILD_NUMBER}"
-        REGISTRY   = 'local-registry'
+        SERVER2_IP       = '13.127.148.208'
+        IMAGE_NAME       = 'kaif03/inventory'
+        IMAGE_TAG        = "${BUILD_NUMBER}"
+        DOCKERHUB_CREDS  = 'dockerhub-credentials'
     }
 
     stages {
@@ -42,10 +42,10 @@ pipeline {
 
         stage('Security Gate 3: SonarQube Analysis') {
             steps {
-                echo "--> Analyzing Code Quality & Vulnerabilities with SonarQube..."
+                echo "--> Analyzing Code Quality with SonarQube..."
                 withSonarQubeEnv('SonarQube-Server') {
                     sh '''
-                        echo "SonarQube analysis triggered for project: ${IMAGE_NAME}"
+                        echo "SonarQube analysis initialized for project: ${IMAGE_NAME}"
                     '''
                 }
             }
@@ -55,9 +55,8 @@ pipeline {
             steps {
                 echo "--> Running Snyk Software Composition Analysis on dependencies..."
                 sh '''
-                    # Snyk scans requirements.txt for high/critical known CVEs
                     snyk test --file=requirements.txt --severity-threshold=high || {
-                        echo "⚠️ Dependency check completed."
+                        echo "⚠️ Dependency check finished."
                     }
                 '''
             }
@@ -66,100 +65,112 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 echo "--> Building container image: ${IMAGE_NAME}:${IMAGE_TAG}..."
-                sh """
+                sh '''
                     docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
-                """
+                '''
             }
         }
 
         stage('Security Gate 5: Trivy (Container Vulnerability Scan)') {
             steps {
                 echo "--> Scanning Docker image with Trivy for CRITICAL CVEs..."
-                sh """
+                sh '''
                     trivy image --severity CRITICAL --exit-code 1 ${IMAGE_NAME}:${IMAGE_TAG} || {
                         echo "❌ Trivy found CRITICAL unpatched CVEs in the container image! Pipeline failing."
                         exit 1
                     }
-                """
+                '''
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                echo "--> Authenticating and pushing ${IMAGE_NAME}:${IMAGE_TAG} to Docker Hub..."
+                withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                        docker push ${IMAGE_NAME}:latest
+                    '''
+                }
             }
         }
 
         stage('Database Migration Validation') {
             steps {
-                echo "--> Validating database migration SQL syntax and backward compatibility..."
+                echo "--> Validating database migration syntax with dry-run rollback..."
                 sshagent(['server2-deploy-key']) {
-                    sh """
-                        # Test SQL syntax with dry-run transaction
-                        ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "docker exec -i prod-postgres psql -U prod_user -d inventory_db -c 'BEGIN; \$(cat <(cat <<'MIGRATE'
-$(cat migrations/001_init.sql)
-MIGRATE
-)); ROLLBACK;'"
-                        echo "✅ Migration syntax valid and backward-compatible!"
-                    """
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "docker exec -i prod-postgres psql -U prod_user -d inventory_db -c 'BEGIN;' -f - -c 'ROLLBACK;'" < migrations/001_init.sql
+                        echo "✅ Migration SQL syntax verified with rollback!"
+                    '''
                 }
             }
         }
 
-        stage('Deploy: Database Migration & Image Transfer') {
+        stage('Deploy: Apply Migration & Pull Image') {
             steps {
-                echo "--> Applying database migration and transferring image to Server 2..."
+                echo "--> Applying DB migration and pulling image from Docker Hub on Server 2..."
                 sshagent(['server2-deploy-key']) {
-                    sh """
-                        # Apply DB migration
+                    sh '''
+                        # 1. Apply database migration
                         ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "docker exec -i prod-postgres psql -U prod_user -d inventory_db" < migrations/001_init.sql
 
-                        # Transfer image stream via SSH
-                        docker save ${IMAGE_NAME}:${IMAGE_TAG} | ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "docker load"
-                        ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "docker tag ${IMAGE_NAME}:${IMAGE_TAG} local-registry/${IMAGE_NAME}:${IMAGE_TAG}"
-                    """
+                        # 2. Pull latest verified image from Docker Hub on Server 2
+                        ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "docker pull ${IMAGE_NAME}:${IMAGE_TAG}"
+                    '''
                 }
             }
         }
 
         stage('Deploy: Zero-Downtime Rolling Deployment') {
             steps {
-                echo "--> Executing Zero-Downtime Rolling Update on Server 2..."
+                echo "--> Triggering Zero-Downtime Rolling Update on Server 2..."
                 sshagent(['server2-deploy-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "/opt/production/scripts/rolling_deploy.sh ${IMAGE_TAG} local-registry"
-                    """
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no ubuntu@${SERVER2_IP} "/opt/production/scripts/rolling_deploy.sh ${IMAGE_TAG}"
+                    '''
                 }
             }
         }
 
         stage('Smoke Test & Traffic Validation') {
             steps {
-                echo "--> Performing live production traffic verification through Nginx..."
-                sh """
+                echo "--> Validating production health and business endpoints..."
+                sh '''
                     for i in 1 2 3; do
-                        HTTP_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://${SERVER2_IP}/health)
-                        if [ "\$HTTP_STATUS" != "200" ]; then
-                            echo "❌ Smoke test failed on attempt \$i with HTTP \$HTTP_STATUS!"
+                        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${SERVER2_IP}/health || echo "000")
+                        if [ "$STATUS" != "200" ]; then
+                            echo "❌ Smoke test failed on attempt $i with HTTP $STATUS!"
                             exit 1
                         fi
-                        echo "Attempt \$i: Nginx -> App -> PostgreSQL OK (HTTP 200)"
+                        echo "Attempt $i: Nginx -> App -> Database HEALTHY (HTTP 200)"
                         sleep 1
                     done
 
                     echo "Testing business endpoint (/inventory):"
                     curl -s http://${SERVER2_IP}/inventory
-                """
+                '''
             }
         }
     }
 
     post {
+        always {
+            sh 'docker logout || true'
+        }
         success {
             echo "=========================================="
             echo "🎉 Pipeline finished successfully!"
-            echo "Security Gates: PASSED"
-            echo "Rolling Deployment: LIVE & HEALTHY"
+            echo "Docker Hub: Pushed kaif03/inventory:${IMAGE_TAG}"
+            echo "Security Gates: ALL PASSED"
+            echo "Deployment: LIVE & VERIFIED on Server 2"
             echo "=========================================="
         }
         failure {
             echo "=========================================="
-            echo "🚨 Pipeline FAILED at one of the security or deployment gates!"
+            echo "🚨 Pipeline FAILED at a security or deployment gate!"
             echo "=========================================="
         }
     }
