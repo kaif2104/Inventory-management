@@ -1,23 +1,25 @@
-FROM node:20-alpine
+# Stage 1: Build & Dependencies
+FROM node:22-alpine AS builder
 
-# Update system packages and npm to patch bundled CVEs
-RUN apk update && apk upgrade --no-cache && \
-    npm install -g npm@latest && \
-    rm -rf /root/.npm
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# Stage 2: Distroless/Minimal Production Runtime
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
 # Install curl for healthcheck
 RUN apk add --no-cache curl
 
-# Copy and install production dependencies
+# Copy production node_modules from builder
+COPY --from=builder /app/node_modules ./node_modules
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY src/ ./src/
+COPY public/ ./public/
 
-# Copy application files
-COPY . .
-
-# Use non-root node user
+# Run as non-root user
 USER node
 
 ENV PORT=8000
